@@ -83,6 +83,15 @@ By utilizing computer vision, this project reimagines gaming, making it more int
 🌍 Explore integration with Augmented Reality (AR) for next-level engagement
 
 
+## License
+
+This project is for **educational and research reference only**.
+
+🛑 **Unauthorized use, reproduction, or distribution of this code is strictly prohibited.**
+Please contact the author for permission.
+
+
+
 
 🤝 Let’s Connect:
 
