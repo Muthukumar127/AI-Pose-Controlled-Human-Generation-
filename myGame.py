@@ -1,229 +1,151 @@
 import cv2
 import pyautogui
 from time import time
-from myPose import myPose
+import mediapipe as mp
+
+class myPose:
+    def __init__(self):
+        self.mp_pose = mp.solutions.pose
+        self.pose_video = self.mp_pose.Pose(static_image_mode=False, min_detection_confidence=0.5)
+
+    def detectPose(self, image, pose, draw=True):
+        imgRGB = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        results = pose.process(imgRGB)
+        if results.pose_landmarks and draw:
+            mp.solutions.drawing_utils.draw_landmarks(image, results.pose_landmarks, self.mp_pose.POSE_CONNECTIONS)
+        return image, results
+
+    def checkPose_LRC(self, image, results, draw=True):
+        # Use mid-hip x coordinate to decide one of four grid positions: Left, Center-Left, Center-Right, Right
+        landmarks = results.pose_landmarks.landmark
+        left_hip = landmarks[self.mp_pose.PoseLandmark.LEFT_HIP]
+        right_hip = landmarks[self.mp_pose.PoseLandmark.RIGHT_HIP]
+        mid_x = (left_hip.x + right_hip.x) / 2
+
+        if mid_x < 0.25:
+            pos = "Left"
+        elif 0.25 <= mid_x < 0.5:
+            pos = "Center-Left"
+        elif 0.5 <= mid_x < 0.75:
+            pos = "Center-Right"
+        else:
+            pos = "Right"
+
+        if draw:
+            cv2.putText(image, f"Horizontal: {pos}", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,0), 2)
+        return image, pos
+
+    def checkPose_JSD(self, image, results, MID_Y, draw=True):
+        # Vertical posture based on midpoint shoulders y coordinate vs MID_Y calibration
+        landmarks = results.pose_landmarks.landmark
+        left_shoulder = landmarks[self.mp_pose.PoseLandmark.LEFT_SHOULDER]
+        right_shoulder = landmarks[self.mp_pose.PoseLandmark.RIGHT_SHOULDER]
+        mid_shoulder_y = (left_shoulder.y + right_shoulder.y) / 2
+
+        diff = mid_shoulder_y - MID_Y
+        posture = "Standing"
+        if diff < -0.05:
+            posture = "Jumping"
+        elif diff > 0.05:
+            posture = "Crouching"
+
+        if draw:
+            cv2.putText(image, f"Vertical: {posture}", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,0), 2)
+        return image, posture
 
 
 class myGame():
     def __init__(self):
         self.pose = myPose()
-
-        # Initialize a variable to store the state of the game (started or not).
-        self.game_started = False
-        # Initialize a variable to store the index of the current horizontal position of the person.
-        # At Start the character is at center so the index is 1 and it can move left (value 0) and right (value 2).
-        self.x_pos_index = 1
-
-        # Initialize a variable to store the index of the current vertical posture of the person.
-        # At Start the person is standing so the index is 1 and he can crouch (value 0) and jump (value 2).
-        self.y_pos_index = 1
-
-        # Initialize a counter to store count of the number of consecutive frames with person's hands joined.
-        self.counter = 0
-
-        # Initialize a variable to store the time of the previous frame.
+        self.game_started = True  # Start game immediately (hand join removed)
+        self.x_pos_index = 1  # 0=Left,1=Center-Left,2=Center-Right,3=Right
+        self.y_pos_index = 1  # 0=Crouch,1=Standing,2=Jump
+        self.MID_Y = None
         self.time1 = 0
 
-        # Declate a variable to store the intial y-coordinate of the mid-point of both shoulders of the person.
-        self.MID_Y = None
-
-        # Initialize the number of consecutive frames on which we want to check if person hands joined before starting the game.
-        self.num_of_frames = 10
-
     def move_LRC(self, LRC):
-        # Check if the person has moved to left from center or to center from right.
-        if (LRC == 'Left' and self.x_pos_index != 0) or (
-                LRC == 'Center' and self.x_pos_index == 2):
+        # Map grid positions to indices for movement
+        target_index = {"Left": 0, "Center-Left": 1, "Center-Right": 2, "Right": 3}[LRC]
 
-            # Press the left arrow key.
-            pyautogui.press('left')
-
-            # Update the horizontal position index of the character.
-            self.x_pos_index -= 1
-
-            # Check if the person has moved to Right from center or to center from left.
-        elif (LRC == 'Right' and self.x_pos_index != 2) or (
-                LRC == 'Center' and self.x_pos_index == 0):
-
-            # Press the right arrow key.
-            pyautogui.press('right')
-
-            # Update the horizontal position index of the character.
-            self.x_pos_index += 1
-        return
+        if target_index > self.x_pos_index:
+            for _ in range(target_index - self.x_pos_index):
+                pyautogui.press('right')
+            self.x_pos_index = target_index
+        elif target_index < self.x_pos_index:
+            for _ in range(self.x_pos_index - target_index):
+                pyautogui.press('left')
+            self.x_pos_index = target_index
 
     def move_JSD(self, JSD):
-        # Check if the person has jumped.
-        if JSD == 'Jumping' and self.y_pos_index == 1:
-
-            # Press the up arrow key
+        # Jump
+        if JSD == 'Jumping' and self.y_pos_index != 2:
             pyautogui.press('up')
-
-            # Update the veritcal position index of  the character.
-            self.y_pos_index += 1
-
-            # Check if the person has crouched.
-        elif JSD == 'Crouching' and self.y_pos_index == 1:
-
-            # Press the down arrow key
+            self.y_pos_index = 2
+        # Crouch
+        elif JSD == 'Crouching' and self.y_pos_index != 0:
             pyautogui.press('down')
-
-            # Update the veritcal position index of the character.
-            self.y_pos_index -= 1
-
-        # Check if the person has stood.
+            self.y_pos_index = 0
+        # Standing (reset)
         elif JSD == 'Standing' and self.y_pos_index != 1:
-
-            # Update the veritcal position index of the character.
             self.y_pos_index = 1
-        return
+
+    def calibrate_MID_Y(self, results):
+        # Calibrate MID_Y once at start based on shoulder midpoint y
+        left_sh = results.pose_landmarks.landmark[self.pose.mp_pose.PoseLandmark.LEFT_SHOULDER]
+        right_sh = results.pose_landmarks.landmark[self.pose.mp_pose.PoseLandmark.RIGHT_SHOULDER]
+        self.MID_Y = (left_sh.y + right_sh.y) / 2
 
     def play(self):
-
-        # Initialize the VideoCapture object to read from the webcam.
         cap = cv2.VideoCapture(0)
         cap.set(3, 1280)
         cap.set(4, 960)
 
-        # Create named window for resizing purposes.
-        cv2.namedWindow('Subway Surfers with Pose Detection', cv2.WINDOW_NORMAL)
+        cv2.namedWindow('Pose Game', cv2.WINDOW_NORMAL)
+
+        calibrated = False
 
         while True:
-            # Read a frame
             ret, image = cap.read()
-
-            # Check if frame is not read properly then continue to the next iteration to read the next frame.
             if not ret:
                 continue
-            else:
-                # Flip the frame horizontally for natural (selfie-view) visualization.
-                image = cv2.flip(image, 1)
 
-                # Get the height and width of the frame of the webcam video.
-                image_height, image_width, _ = image.shape
+            image = cv2.flip(image, 1)
+            image_height, image_width, _ = image.shape
 
-                # Perform the pose detection on the frame.
-                image, results = self.pose.detectPose(image, self.pose.pose_video, draw=self.game_started)
+            image, results = self.pose.detectPose(image, self.pose.pose_video, draw=self.game_started)
 
-                # Check if the pose landmarks in the frame are detected.
-                if results.pose_landmarks:
+            if results.pose_landmarks:
+                if not calibrated:
+                    self.calibrate_MID_Y(results)
+                    calibrated = True
+                    print("MID_Y calibrated:", self.MID_Y)
 
-                    # Check if the game has started
-                    if self.game_started:
-                        # Commands to control the horizontal movements of the character.
-                        # --------------------------------------------------------------------------------------------------------------
+                if self.game_started and calibrated:
+                    # Horizontal grid move
+                    image, LRC = self.pose.checkPose_LRC(image, results, draw=True)
+                    self.move_LRC(LRC)
 
-                        # Get horizontal position of the person in the frame.
-                        image, LRC = self.pose.checkPose_LRC(image, results, draw=True)
-                        self.move_LRC(LRC)
+                    # Vertical jump/crouch move
+                    image, JSD = self.pose.checkPose_JSD(image, results, self.MID_Y, draw=True)
+                    self.move_JSD(JSD)
 
-                        # ------------------------------------------------------------------------------------------------------------------
+            # FPS display
+            time2 = time()
+            if (time2 - self.time1) > 0:
+                fps = 1.0 / (time2 - self.time1)
+                cv2.putText(image, f'FPS: {int(fps)}', (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 3)
+            self.time1 = time2
 
-                        # Commands to control the vertical movements of the character.
-                        # ------------------------------------------------------------------------------------------------------------------
+            cv2.imshow("Pose Game", image)
 
-                        # Check if the intial y-coordinate of the mid-point of both shoulders of the person has a value.
-                        if self.MID_Y:
-                            image, JSD = self.pose.checkPose_JSD(image, results, self.MID_Y, draw=True)
-                            self.move_JSD(JSD)
-
-                    # Otherwise if the game has not started
-                    else:
-
-                        # Write the text representing the way to start the game on the frame.
-                        cv2.putText(image, 'JOIN BOTH HANDS TO START THE GAME.', (5, image_height - 10),
-                                    cv2.FONT_HERSHEY_PLAIN,
-                                    2, (0, 255, 0), 3)
-
-                    # Command to Start or resume the game.
-                    # ------------------------------------------------------------------------------------------------------------------
-
-                    # Check if the left and right hands are joined.
-                    if self.pose.checkHandsJoined(image, results)[1] == 'Hands Joined':
-
-                        # Increment the count of consecutive frames with +ve condition.
-                        self.counter += 1
-
-                        # Check if the counter is equal to the required number of consecutive frames.
-                        if self.counter == self.num_of_frames:
-
-                            # Command to Start the game first time.
-                            # ----------------------------------------------------------------------------------------------------------
-
-                            # Check if the game has not started yet.
-                            if not (self.game_started):
-
-                                # Update the value of the variable that stores the game state.
-                                self.game_started = True
-
-                                # Retreive the y-coordinate of the left shoulder landmark.
-                                left_y = int(results.pose_landmarks.landmark[
-                                                 self.pose.mp_pose.PoseLandmark.RIGHT_SHOULDER].y * image_height)
-
-                                # Retreive the y-coordinate of the right shoulder landmark.
-                                right_y = int(results.pose_landmarks.landmark[
-                                                  self.pose.mp_pose.PoseLandmark.LEFT_SHOULDER].y * image_height)
-
-                                # Calculate the intial y-coordinate of the mid-point of both shoulders of the person.
-                                self.MID_Y = abs(right_y + left_y) // 2
-
-                                # Move to 1300, 800, then click the left mouse button to start the game.
-                                pyautogui.click(x=1300, y=800, button='left')
-
-                            # ----------------------------------------------------------------------------------------------------------
-
-                            # Command to resume the game after death of the character.
-                            # ----------------------------------------------------------------------------------------------------------
-
-                            # Otherwise if the game has started.
-                            else:
-
-                                # Press the space key.
-                                pyautogui.press('space')
-
-                            # ----------------------------------------------------------------------------------------------------------
-                            # Update the counter value to zero.
-                            self.counter = 0
-
-                    # Otherwise if the left and right hands are not joined.
-                    else:
-
-                        # Update the counter value to zero.
-                        self.counter = 0
-
-                # Otherwise if the pose landmarks in the frame are not detected.
-                else:
-                    self.counter = 0
-
-                # Calculate the frames updates in one second
-                # ----------------------------------------------------------------------------------------------------------------------
-
-                # Set the time for this frame to the current time.
-                time2 = time()
-
-                # Check if the difference between the previous and this frame time > 0 to avoid division by zero.
-                if (time2 - self.time1) > 0:
-
-                    # Calculate the number of frames per second.
-                    frames_per_second = 1.0 / (time2 - self.time1)
-
-                    # Write the calculated number of frames per second on the frame.
-                    cv2.putText(image, 'FPS: {}'.format(int(frames_per_second)), (10, 30), cv2.FONT_HERSHEY_PLAIN,
-                                2, (0, 255, 0), 3)
-
-                # Update the previous frame time to this frame time.
-                # As this frame will become previous frame in next iteration.
-                self.time1 = time2
-
-                cv2.imshow("Subway Surfers with Pose Detection", image)
-
-                # Wait for 1ms. If a a key is pressed, check
-                if cv2.waitKey(1) == ord('q'):
-                    break
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
 
         cap.release()
         cv2.destroyAllWindows()
 
 
-myGame = myGame()
-myGame.play()
+if __name__ == '__main__':
+    game = myGame()
+    game.play()
+
